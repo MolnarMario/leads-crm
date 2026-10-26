@@ -4,6 +4,10 @@
    This file is public: it holds no data and no secret. The publishable key below
    is meant to ship in pages; without a signed-in account listed in app_users,
    the database returns nothing (see supabase/schema.sql). */
+/* GitHub Pages serves this path over plain http too; the sign-in belongs on https */
+if (location.protocol === "http:" && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname))
+  location.replace("https:" + location.href.slice(5));
+
 const SUPABASE_URL = "https://otzhzgxlivdotqpofdpx.supabase.co";
 const SUPABASE_KEY = "sb_publishable_NlmY9d0s61Dj0dDxDm6cww_9ibbBPBy";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
