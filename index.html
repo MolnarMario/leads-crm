@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- the page only talks to this Supabase project; the leads and notes come from
+     there after sign-in, none of them are in this repo -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self'; connect-src https://otzhzgxlivdotqpofdpx.supabase.co; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<title>Leads CRM</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="gate">
+  <form class="card" id="loginForm">
+    <h1>📞 Leads CRM</h1>
+    <p id="gateMsg">Sign in to see the leads.</p>
+    <div id="loginFields">
+      <label for="email">Email</label>
+      <input type="email" id="email" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input type="password" id="password" autocomplete="current-password" required>
+      <button type="submit" class="primary" id="loginBtn">Sign in</button>
+    </div>
+    <div class="err" id="loginErr"></div>
+  </form>
+</div>
+
+<div id="app" hidden>
+<header>
+  <h1>📞 Leads CRM</h1>
+  <span class="sub" id="datasub"></span>
+  <span class="spacer"></span>
+  <button id="unsaved" hidden title="These changes did not reach the database. Click to try again."></button>
+  <button id="exportCsv" title="Download the current filtered view as CSV">⬇ CSV</button>
+  <button id="exportJson" title="Download statuses + notes as a JSON file">💾 Backup</button>
+  <button id="importJson" title="Upload statuses + notes from a backup file, including one from the old offline index.html">📂 Restore</button>
+  <input type="file" id="importFile" accept=".json" hidden>
+  <button id="theme" title="Toggle dark mode">🌙</button>
+  <button id="signOut" title="Sign out on this device">Sign out</button>
+</header>
+
+<div class="kpis" id="kpis"></div>
+
+<div class="filters">
+  <select id="fCity" title="Search area: a box around the city centre, so nearby villages are included"></select>
+  <input type="text" id="q" placeholder="Search name / phone / address…">
+  <select id="fCat"></select>
+  <select id="fLead">
+    <option value="">Website: all</option>
+    <option value="none">✔ No website listed</option>
+    <option value="social">📱 Facebook / directory only</option>
+    <option value="maybe">❓ Possible site found</option>
+  </select>
+  <select id="fSort" title="Sort order">
+    <option value="_rank">Sort: Most likely to close</option>
+    <option value="category">Sort: Business Type (A → Z)</option>
+    <option value="reviews">Sort: Most reviews</option>
+    <option value="rating">Sort: Highest rating</option>
+    <option value="name">Sort: Name (A → Z)</option>
+    <option value="status">Sort: Call status</option>
+  </select>
+  <select id="fStatus"></select>
+  <button id="clear">Reset</button>
+  <span class="count" id="count"></span>
+</div>
+
+<div class="wrap">
+  <div class="layout">
+    <div class="tablebox">
+      <table>
+        <thead id="thead"></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div class="empty" id="empty" hidden>No leads match the current filters.</div>
+    </div>
+    <aside id="drawer">
+      <div id="dEmpty">👈 Click a business in the list to see its details here.</div>
+      <div id="dContent" hidden>
+        <div class="head">
+          <button class="close" id="dClose" title="Deselect">✕</button>
+          <h2 id="dName"></h2>
+          <div class="meta" id="dMeta"></div>
+          <div class="actions" id="dActions"></div>
+        </div>
+        <div class="body">
+          <div class="sect">Call status</div>
+          <div class="statusgrid" id="dStatus"></div>
+          <div class="sect">Callback / follow-up date</div>
+          <input type="date" id="dCallback">
+          <div class="sect">Notes <span class="saved" id="dSaved">✓ saved</span></div>
+          <textarea id="dNotes" placeholder="Who did you talk to? Objections? Price quoted?…"></textarea>
+          <div class="sect">Details</div>
+          <div class="kv" id="dInfo"></div>
+          <div class="sect">Activity</div>
+          <ul class="log" id="dLog"></ul>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+</div>
+<div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"
+        integrity="sha384-BWcjm9OdFth9TbhCxZPdm+gAOUMAzQy9nmTs12ioXdCcbVnJaPMn+fMUoQCLt60R"
+        crossorigin="anonymous"></script>
+<script src="app.js"></script>
+</body>
+</html>
