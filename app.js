@@ -25,6 +25,18 @@ const STATUSES = [
   ["lost",           "✖", "Lost"],
 ];
 const ST = Object.fromEntries(STATUSES.map(([k, i, l]) => [k, { icon: i, label: l }]));
+/* Sales steps after the call, ticked in the detail panel. Each one stores the
+   time it was ticked in state.stages; the furthest one ticked is the lead's stage. */
+const STAGES = [
+  ["demo_requested",  "Demo requested"],
+  ["demo_sent",       "Demo sent"],
+  ["offer_sent",      "Offer sent"],
+  ["followup_1",      "Follow-up sent"],
+  ["followup_2",      "2nd follow-up sent"],
+  ["closed_inactive", "Closed, no reply"],
+];
+const STG = Object.fromEntries(STAGES.map(([k, l], i) => [k, { label: l, rank: i + 1 }]));
+const lastStage = s => STAGES.reduce((last, [k]) => s.stages?.[k] ? k : last, "");
 /* what the Google listing shows in its website slot */
 const LV = {
   none:   { icon: "✔", label: "No website",           rank: 0 },
@@ -48,24 +60,28 @@ let store = { byId: {} };
 function stateOf(lead) {
   let s = store.byId[lead.id];
   if (!s) {
-    s = { status: "new", notes: "", callback: "", log: [], name: lead.name };
+    s = { status: "new", notes: "", callback: "", log: [], stages: {}, name: lead.name };
     store.byId[lead.id] = s;
   }
   return s;
 }
-const touched = s => s.status !== "new" || s.notes || s.callback || s.log?.length;
+const touched = s => s.status !== "new" || s.notes || s.callback || s.log?.length ||
+  Object.keys(s.stages || {}).length;
+/* rows saved before stages existed have none */
+const normState = s => ({ ...s, stages: s.stages && typeof s.stages === "object" ? s.stages : {} });
 
 /* Writes for one lead go out in order, each carrying the state at the moment it
    was made. A failed write stays listed under the "not saved" button until a
    retry gets through. */
-const queue = {}, unsaved = new Set();
+const queue = {}, unsaved = new Set(), writing = {};
 let inflight = 0;
 function save(id) {
   const s = store.byId[id];
   const row = { id, state: { status: s.status, notes: s.notes, callback: s.callback,
-                             log: s.log, name: s.name },
+                             log: s.log, stages: s.stages, name: s.name },
                 updated_at: new Date().toISOString() };
   inflight++;
+  writing[id] = (writing[id] || 0) + 1;
   queue[id] = (queue[id] || Promise.resolve()).then(async () => {
     const { error } = await sb.from("crm").upsert(row);
     if (error) {
@@ -75,7 +91,11 @@ function save(id) {
     } else {
       unsaved.delete(id);
     }
-  }).finally(() => { inflight--; showUnsaved(); });
+  }).finally(() => {
+    inflight--;
+    if (!--writing[id]) delete writing[id];
+    showUnsaved();
+  });
 }
 function showUnsaved() {
   const b = document.getElementById("unsaved");
@@ -97,7 +117,7 @@ const fmtT = iso => iso ? new Date(iso).toLocaleString(undefined,
 /* local calendar date, matching what <input type="date"> stores (toISOString would be UTC) */
 const today = () => new Date().toLocaleDateString("sv-SE");
 const dueNow = s => s.callback && s.callback <= today() &&
-  !["won", "lost", "not_interested"].includes(s.status);
+  !["won", "lost", "not_interested"].includes(s.status) && !s.stages?.closed_inactive;
 
 /* ---------- loading ---------- */
 /* Supabase returns at most 1000 rows per request */
@@ -112,7 +132,37 @@ async function fetchAll(table, cols, order) {
 }
 async function loadCrm() {
   const rows = await fetchAll("crm", "id, state", "id");
-  store = { byId: Object.fromEntries(rows.map(r => [r.id, r.state])) };
+  store = { byId: Object.fromEntries(rows.map(r => [r.id, normState(r.state)])) };
+}
+
+/* Pull what other devices saved. A lead with a write of this tab's still on its
+   way, failed, or notes typed and not yet sent keeps the local copy, so the
+   refresh never undoes an edit made here. Returns the ids that changed. */
+let refreshing = false;
+async function refreshCrm() {
+  if (refreshing || !LEADS.length) return [];
+  refreshing = true;
+  try {
+    const rows = await fetchAll("crm", "id, state", "id");
+    const changed = [];
+    for (const r of rows) {
+      if (writing[r.id] || unsaved.has(r.id) || pendingNotes?.lead.id === r.id) continue;
+      const remote = normState(r.state), local = store.byId[r.id];
+      if (local && JSON.stringify(local) === JSON.stringify(remote)) continue;
+      store.byId[r.id] = remote;
+      changed.push(r.id);
+    }
+    return changed;
+  } finally {
+    refreshing = false;
+  }
+}
+async function syncNow() {
+  let changed;
+  try { changed = await refreshCrm(); } catch (err) { return console.error(err); }
+  if (!changed.length) return;
+  if (openLead && changed.includes(openLead.id)) refreshDrawer();
+  render();
 }
 
 /* ---------- sign-in ---------- */
@@ -170,16 +220,13 @@ async function openApp() {
   render();
 }
 
-/* Back on the tab after using another device: pull the latest notes first, so
-   this tab doesn't write over them with what it had in memory. */
-document.addEventListener("visibilitychange", async () => {
-  if (document.visibilityState !== "visible" || !LEADS.length) return;
-  flushNotes();
-  await Promise.all(Object.values(queue));
-  if (unsaved.size) return;   // keep the local edits that haven't reached the database
-  try { await loadCrm(); } catch (err) { return console.error(err); }
-  if (openLead && document.activeElement !== D.dNotes) openDrawer(openLead.id);
-  else render();
+/* Other devices' changes show up within SYNC_MS while the tab is open, and at
+   once when you come back to it, so this tab doesn't write over them with what
+   it had in memory. */
+const SYNC_MS = 15000;
+setInterval(() => { if (document.visibilityState === "visible") syncNow(); }, SYNC_MS);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") syncNow();
 });
 
 /* ---------- helpers ---------- */
@@ -205,7 +252,7 @@ function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return n
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 
 /* ---------- filters & sorting ---------- */
-const els = Object.fromEntries(["q","fCity","fCat","fLead","fSort","fStatus","count","kpis",
+const els = Object.fromEntries(["q","fCity","fCat","fLead","fSort","fStatus","fStage","count","kpis",
   "thead","tbody","empty","datasub"].map(id => [id, document.getElementById(id)]));
 let sortKey = "_rank", sortDir = 1, selectedId = null, kpiFilter = null;
 
@@ -269,6 +316,8 @@ function fillCats() {
 }
 els.fStatus.innerHTML = `<option value="">Status: all</option>` +
   STATUSES.map(([k,, l]) => `<option value="${k}">${l}</option>`).join("");
+els.fStage.innerHTML = `<option value="">Pipeline: all</option><option value="-">Pipeline: nothing ticked</option>` +
+  STAGES.map(([k, l]) => `<option value="${k}">At: ${l}</option>`).join("");
 
 els.fSort.onchange = () => {
   sortKey = els.fSort.value;
@@ -279,7 +328,7 @@ els.fSort.onchange = () => {
 const COLS = [
   ["name", "Business"], ["category", "Business Type"], ["phone", "Phone"],
   ["score", "Score"], ["lead", "Website"], ["rating", "Rating"], ["reviews", "Reviews"],
-  ["status", "Call status"], ["callback", "Callback"], ["updated", "Last activity"],
+  ["status", "Call status"], ["stage", "Pipeline"], ["callback", "Callback"], ["updated", "Last activity"],
   ["notes", "Notes"],
 ];
 const NUMERIC = ["reviews", "rating", "score"];
@@ -294,8 +343,10 @@ els.thead.querySelectorAll("th").forEach(th => th.onclick = () => {
 
 function enrich(l) {
   const s = stateOf(l);
+  const stage = lastStage(s);
   return { ...l, lead: leadVerdict(l), status: s.status, notes: s.notes,
-           callback: s.callback, updated: s.log[0]?.t || "", due: dueNow(s) };
+           callback: s.callback, updated: s.log[0]?.t || "", due: dueNow(s),
+           stage, stageAt: stage ? s.stages[stage] : "" };
 }
 /* skipCat leaves out the business type filter, so the dropdown can count each type */
 function filtered(skipCat) {
@@ -306,6 +357,7 @@ function filtered(skipCat) {
     if (!skipCat && els.fCat.value && l.category !== els.fCat.value) return false;
     if (els.fLead.value && l.lead !== els.fLead.value) return false;
     if (els.fStatus.value && l.status !== els.fStatus.value) return false;
+    if (els.fStage.value && l.stage !== (els.fStage.value === "-" ? "" : els.fStage.value)) return false;
     if (kpiFilter === "due" && !l.due) return false;
     if (kpiFilter === "fresh" && l.status !== "new") return false;
     if (kpiFilter === "pipeline" && !["interested", "meeting", "callback"].includes(l.status)) return false;
@@ -329,6 +381,8 @@ function sorted(rows) {
       const r = Object.fromEntries(STATUSES.map(([k], i) => [k, i]));
       return (r[x] - r[y]) * dir;
     }
+    if (sortKey === "stage")   // furthest along first on the first click
+      return ((STG[y]?.rank || 0) - (STG[x]?.rank || 0)) * dir || a._rank - b._rank;
     x = String(x ?? ""); y = String(y ?? "");
     if (!x && y) return 1; if (x && !y) return -1;
     return x.localeCompare(y, "ro") * dir || a._rank - b._rank;
@@ -359,6 +413,7 @@ function render() {
       <td class="num">${esc(l.rating ?? "")}</td>
       <td class="num">${esc(l.reviews ?? "")}</td>
       <td>${badge("st-" + esc(l.status), stOf(l.status).icon, stOf(l.status).label)}</td>
+      <td>${l.stage ? `<span class="badge stg-${l.stage}" title="${esc(fmtT(l.stageAt))}">${esc(STG[l.stage].label)}</span>` : ""}</td>
       <td class="num">${l.callback ? (l.due ? "⚠ " : "") + esc(l.callback) : ""}</td>
       <td class="num">${fmtT(l.updated)}</td>
       <td><div class="notesprev">${esc(l.notes)}</div></td>
@@ -389,7 +444,7 @@ function renderKpis() {
 }
 
 /* ---------- drawer ---------- */
-const D = Object.fromEntries(["drawer","dName","dMeta","dActions","dStatus","dCallback",
+const D = Object.fromEntries(["drawer","dName","dMeta","dActions","dStatus","dStages","dCallback",
   "dNotes","dSaved","dInfo","dLog","dClose","dEmpty","dContent"].map(id => [id, document.getElementById(id)]));
 let openLead = null, notesTimer = null;
 
@@ -425,7 +480,7 @@ function openDrawer(id) {
   ].map(([k, v]) => `<div><b>${k}</b> ${esc(v)}</div>`).join("") +
     (l.why?.length ? `<div><b>Why this score</b><ul class="why">` +
       l.why.map(w => `<li>${esc(w)}</li>`).join("") + `</ul></div>` : "");
-  renderStatusGrid(s); renderLog(s);
+  renderStatusGrid(s); renderStages(s); renderLog(s);
   D.dEmpty.hidden = true; D.dContent.hidden = false;
   D.drawer.classList.add("open");
   render();
@@ -440,6 +495,27 @@ function renderStatusGrid(s) {
       renderStatusGrid(s); renderLog(s); render(); toast(`${ST[k].icon} ${ST[k].label}`);
     }
   });
+}
+function renderStages(s) {
+  D.dStages.innerHTML = STAGES.map(([k, label]) =>
+    `<label class="${s.stages[k] ? "on" : ""}"><input type="checkbox" data-stage="${k}" ${s.stages[k] ? "checked" : ""}>` +
+    `<span>${label}</span><time>${fmtT(s.stages[k])}</time></label>`).join("");
+  D.dStages.querySelectorAll("input").forEach(box => box.onchange = () => {
+    const k = box.dataset.stage, label = STG[k].label;
+    if (box.checked) { s.stages[k] = new Date().toISOString(); logIt(s, `✔ ${label}`); }
+    else { delete s.stages[k]; logIt(s, `Unticked: ${label}`); }
+    save(openLead.id);
+    renderStages(s); renderLog(s); render();
+    toast(box.checked ? `✔ ${label}` : `Unticked: ${label}`);
+  });
+}
+/* another device changed the open lead: show its version, but leave the notes
+   box alone while you're typing in it */
+function refreshDrawer() {
+  const s = stateOf(openLead);
+  renderStatusGrid(s); renderStages(s); renderLog(s);
+  D.dCallback.value = s.callback || "";
+  if (document.activeElement !== D.dNotes) D.dNotes.value = s.notes || "";
 }
 function renderLog(s) {
   D.dLog.innerHTML = s.log.length
@@ -485,18 +561,23 @@ els.tbody.addEventListener("click", e => {
 });
 
 /* ---------- header actions ---------- */
-[els.q, els.fCat, els.fLead, els.fSort, els.fStatus].forEach(el => el.addEventListener("input", render));
+[els.q, els.fCat, els.fLead, els.fSort, els.fStatus, els.fStage].forEach(el => el.addEventListener("input", render));
 document.getElementById("clear").onclick = () => {
   els.q.value = "";
-  [els.fCat, els.fLead, els.fStatus].forEach(el => el.value = "");
+  [els.fCat, els.fLead, els.fStatus, els.fStage].forEach(el => el.value = "");
   els.fSort.value = "_rank";
   sortKey = "_rank"; sortDir = 1;
   kpiFilter = null; render();
 };
 document.getElementById("exportCsv").onclick = () => {
-  const rows = sorted(filtered());
+  const rows = sorted(filtered()).map(r => {
+    const st = stateOf(r).stages;
+    return { ...r, stage: STG[r.stage]?.label || "",
+             ...Object.fromEntries(STAGES.map(([k]) => [k, (st[k] || "").slice(0, 10)])) };
+  });
   const cols = ["name","city","county","category","phone","address","lead","website",
-                "rating","reviews","score","why","status","callback","notes","mapsUrl"];
+                "rating","reviews","score","why","status","stage",...STAGES.map(([k]) => k),
+                "callback","notes","mapsUrl"];
   const csv = [cols.join(",")].concat(rows.map(r => cols.map(c => {
     const v = Array.isArray(r[c]) ? r[c].join("; ") : String(r[c] ?? "");
     return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
@@ -525,7 +606,9 @@ document.getElementById("importFile").onchange = async e => {
   const now = new Date().toISOString();
   const rows = entries.map(([id, s]) => ({ id, updated_at: now, state: {
     status: ST[s.status] ? s.status : "new", notes: s.notes || "", callback: s.callback || "",
-    log: Array.isArray(s.log) ? s.log : [], name: s.name || "" } }));
+    log: Array.isArray(s.log) ? s.log : [], name: s.name || "",
+    stages: s.stages && typeof s.stages === "object"
+      ? Object.fromEntries(Object.entries(s.stages).filter(([k]) => STG[k])) : {} } }));
   for (let i = 0; i < rows.length; i += 500) {
     const { error } = await sb.from("crm").upsert(rows.slice(i, i + 500));
     if (error) return toast(`Restore stopped after ${i} entries: ${error.message}`);

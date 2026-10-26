@@ -187,6 +187,19 @@ html.dark .chip-default         { background: var(--chip); color: var(--ink-2); 
 }
 .statusgrid button.on { border-width: 2px; font-weight: 650; }
 .statusgrid button.on.st-won { color:#fff; }
+.stages { display: grid; gap: 4px; }
+.stages label {
+  display: flex; align-items: center; gap: 9px; font-size: 13px; cursor: pointer;
+  border: 1.5px solid var(--baseline); border-radius: 8px; padding: 6px 10px;
+}
+.stages label:hover { background: var(--row-hover); }
+.stages label.on { border-color: var(--accent); font-weight: 600; }
+.stages input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent); }
+.stages span { flex: 1; }
+.stages time { color: var(--muted); font-size: 12px; font-weight: 400; font-variant-numeric: tabular-nums; }
+/* pipeline step in the table; the closed one reads as finished, not as progress */
+.badge[class*="stg-"] { color: var(--accent); border-color: var(--accent); }
+.badge.stg-closed_inactive { color: var(--muted); border-color: var(--baseline); }
 textarea {
   width: 100%; min-height: 110px; font: inherit; color: var(--ink);
   background: var(--page); border: 1px solid var(--baseline);

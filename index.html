@@ -60,8 +60,10 @@
     <option value="rating">Sort: Highest rating</option>
     <option value="name">Sort: Name (A → Z)</option>
     <option value="status">Sort: Call status</option>
+    <option value="stage">Sort: Furthest in pipeline</option>
   </select>
   <select id="fStatus"></select>
+  <select id="fStage" title="The furthest step ticked for each lead"></select>
   <button id="clear">Reset</button>
   <span class="count" id="count"></span>
 </div>
@@ -87,6 +89,8 @@
         <div class="body">
           <div class="sect">Call status</div>
           <div class="statusgrid" id="dStatus"></div>
+          <div class="sect">Pipeline</div>
+          <div class="stages" id="dStages"></div>
           <div class="sect">Callback / follow-up date</div>
           <input type="date" id="dCallback">
           <div class="sect">Notes <span class="saved" id="dSaved">✓ saved</span></div>
