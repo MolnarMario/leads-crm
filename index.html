@@ -30,11 +30,12 @@
 <div id="app" hidden>
 <header>
   <h1>📞 Leads CRM</h1>
-  <span class="sub" id="datasub"></span>
+  <!-- before the subtitle, so the switch doesn't move when the subtitle text changes -->
   <div class="views" role="group" aria-label="View">
     <button id="vList" title="Every lead, with filters">Leads</button>
     <button id="vFunnel" title="The pipeline: counts per step and who needs a next move">Funnel</button>
   </div>
+  <span class="sub" id="datasub"></span>
   <span class="spacer"></span>
   <button id="unsaved" hidden title="These changes did not reach the database. Click to try again."></button>
   <button id="exportCsv" title="Download the current filtered view as CSV">⬇ CSV</button>
