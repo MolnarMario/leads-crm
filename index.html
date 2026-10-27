@@ -31,6 +31,10 @@
 <header>
   <h1>📞 Leads CRM</h1>
   <span class="sub" id="datasub"></span>
+  <div class="views" role="group" aria-label="View">
+    <button id="vList" title="Every lead, with filters">Leads</button>
+    <button id="vFunnel" title="The pipeline: counts per step and who needs a next move">Funnel</button>
+  </div>
   <span class="spacer"></span>
   <button id="unsaved" hidden title="These changes did not reach the database. Click to try again."></button>
   <button id="exportCsv" title="Download the current filtered view as CSV">⬇ CSV</button>
@@ -77,6 +81,7 @@
       </table>
       <div class="empty" id="empty" hidden>No leads match the current filters.</div>
     </div>
+    <div id="funnel" hidden></div>
     <aside id="drawer">
       <div id="dEmpty">👈 Click a business in the list to see its details here.</div>
       <div id="dContent" hidden>

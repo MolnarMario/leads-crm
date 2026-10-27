@@ -245,3 +245,69 @@ textarea {
 #gate .err { color: var(--critical-text); font-size: 13px; margin-top: 10px; min-height: 1em; }
 #unsaved { border-color: var(--critical); color: var(--critical-text); font-weight: 600; }
 #unsaved[hidden] { display: none; }
+
+/* Leads / Funnel switch in the header */
+.views { display: inline-flex; border: 1px solid var(--baseline); border-radius: 8px; overflow: hidden; }
+.views button { border: none; border-radius: 0; padding: 5px 12px; }
+.views button + button { border-left: 1px solid var(--baseline); }
+.views button.on { background: var(--accent); color: #fff; font-weight: 600; }
+
+/* funnel view: the table and its filters step aside, the drawer stays */
+body.view-funnel .kpis, body.view-funnel .filters, body.view-funnel .tablebox { display: none; }
+body.view-funnel .wrap { padding-top: 14px; }
+@media (min-width: 981px) {
+  body.view-funnel #drawer { max-height: calc(100vh - 90px); position: sticky; top: 76px; align-self: flex-start; }
+}
+#funnel { flex: 1; min-width: 0; }
+#funnel[hidden] { display: none; }
+#funnel h3 { margin: 0 0 2px; font-size: 14px; font-weight: 650; }
+#funnel .hint { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+.fgrid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 12px; }
+@media (max-width: 1250px) { .fgrid { grid-template-columns: minmax(0, 1fr); } }
+.fcard, .bucket {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
+}
+.fbar { display: grid; grid-template-columns: 130px 1fr 74px; align-items: center; gap: 10px; padding: 3px 0; }
+.fbar .lbl { font-size: 12.5px; color: var(--ink-2); }
+.fbar .track { height: 14px; border-bottom: 1px solid var(--baseline); }
+.fbar .fill { display: block; height: 100%; min-width: 2px; background: var(--accent); border-radius: 0 4px 4px 0; }
+.fbar:hover .fill { filter: brightness(1.12); }
+.fbar .val { font-variant-numeric: tabular-nums; font-weight: 650; text-align: right; }
+.fbar .val small { color: var(--muted); font-weight: 400; margin-left: 6px; font-size: 11.5px; }
+table.act { min-width: 0; font-size: 13px; }
+table.act th { position: static; cursor: default; padding: 4px 6px; }
+table.act td { padding: 4px 6px; border-bottom: 1px solid var(--grid); }
+table.act td.num, table.act th.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.act td.zero { color: var(--muted); }
+#funnel h3.fphase {
+  font-size: 11.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+  margin: 18px 0 8px;
+}
+.buckets { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; align-items: start; }
+.bucket .bh { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.bucket .bh b { font-size: 13.5px; }
+.bucket .n {
+  font-variant-numeric: tabular-nums; font-weight: 650; font-size: 12px;
+  background: var(--chip); border-radius: 999px; padding: 0 8px;
+}
+.bucket .over { color: var(--warn-text); font-size: 12px; font-weight: 600; }
+.bucket .hint { margin: 2px 0 6px !important; }
+.bucket.none { opacity: .55; }
+.bucket.none .hint { margin-bottom: 0 !important; }
+.bucket ul { list-style: none; margin: 0 -6px; padding: 0; max-height: 320px; overflow: hidden auto; }
+.bucket li {
+  display: grid; grid-template-columns: 1fr auto; column-gap: 8px;
+  padding: 6px; border-radius: 6px; cursor: pointer; border-top: 1px solid var(--grid);
+}
+.bucket li:hover { background: var(--row-hover); }
+.bucket li.sel { background: var(--accent-soft); }
+.bucket li.late { box-shadow: inset 3px 0 0 var(--warning); }
+.bucket .nm { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bucket .nm small { color: var(--muted); font-weight: 400; }
+.bucket .age { font-size: 12px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.bucket li.late .age { color: var(--warn-text); font-weight: 600; }
+.bucket .ct { grid-column: 1 / -1; font-size: 12px; color: var(--ink-2); }
+.bucket .ct a { color: var(--accent); text-decoration: none; }
+/* drawer: one heading per group of steps */
+.stages .phase { font-size: 11px; color: var(--muted); margin: 6px 0 0; font-weight: 600; }
+.stages .phase:first-child { margin-top: 0; }

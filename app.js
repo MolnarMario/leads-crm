@@ -25,17 +25,29 @@ const STATUSES = [
   ["lost",           "✖", "Lost"],
 ];
 const ST = Object.fromEntries(STATUSES.map(([k, i, l]) => [k, { icon: i, label: l }]));
-/* Sales steps after the call, ticked in the detail panel. Each one stores the
-   time it was ticked in state.stages; the furthest one ticked is the lead's stage. */
+/* Steps after the call, ticked in the detail panel. Each one stores the time it
+   was ticked in state.stages; the furthest one ticked is the lead's stage. Sales
+   and project steps happen in this order. Launch steps come after the project is
+   done, in whatever order the client gets to them. */
 const STAGES = [
-  ["demo_requested",  "Demo requested"],
-  ["demo_sent",       "Demo sent"],
-  ["offer_sent",      "Offer sent"],
-  ["followup_1",      "Follow-up sent"],
-  ["followup_2",      "2nd follow-up sent"],
-  ["closed_inactive", "Closed, no reply"],
+  ["demo_requested",  "Demo requested",          "Sales"],
+  ["demo_sent",       "Demo sent",               "Sales"],
+  ["offer_sent",      "Offer sent",              "Sales"],
+  ["followup_1",      "Follow-up sent",          "Sales"],
+  ["followup_2",      "2nd follow-up sent",      "Sales"],
+  ["agreed",          "Said yes",                "Sales"],
+  ["deposit_asked",   "Asked for 50% upfront",   "Project"],
+  ["deposit_paid",    "50% upfront paid",        "Project"],
+  ["in_progress",     "Project started",         "Project"],
+  ["completed",       "Project completed",       "Project"],
+  ["final_asked",     "Asked for the other 50%", "Launch"],
+  ["domain",          "Domain ready",            "Launch"],
+  ["hosting",         "Hosting ready",           "Launch"],
+  ["published",       "Published",               "Launch"],
+  ["paid_full",       "Paid in full",            "Launch"],
+  ["closed_inactive", "Closed, no reply",        ""],
 ];
-const STG = Object.fromEntries(STAGES.map(([k, l], i) => [k, { label: l, rank: i + 1 }]));
+const STG = Object.fromEntries(STAGES.map(([k, l, p], i) => [k, { label: l, phase: p, rank: i + 1 }]));
 const lastStage = s => STAGES.reduce((last, [k]) => s.stages?.[k] ? k : last, "");
 /* what the Google listing shows in its website slot */
 const LV = {
@@ -214,10 +226,11 @@ async function openApp() {
     return showGate("Signed in, but the database showed no leads. Either push_leads.py " +
       "hasn't run yet, or this account isn't in app_users (see supabase/schema.sql).");
   }
+  leadById = new Map(LEADS.map(l => [l.id, l]));
   gate.box.hidden = true;
   document.getElementById("app").hidden = false;
   fillCities();
-  render();
+  setView(view);
 }
 
 /* Other devices' changes show up within SYNC_MS while the tab is open, and at
@@ -396,6 +409,7 @@ function badge(cls, icon, label) {
 const stOf = k => ST[k] || ST.new;
 const ROW_CAP = 1500;
 function render() {
+  if (view === "funnel") return renderFunnel();
   fillCats();
   const rows = sorted(filtered());
   const shown = rows.length > ROW_CAP ? rows.slice(0, ROW_CAP) : rows;
@@ -442,6 +456,187 @@ function renderKpis() {
     render();
   });
 }
+
+/* ---------- funnel ---------- */
+/* The whole pipeline on one screen, across all cities: how many leads reached
+   each step, what got done lately, and who is waiting on a next move from you. */
+let view = lsGet("ro-leads-view") === "funnel" ? "funnel" : "list";
+const LINEAR = STAGES.filter(([, , p]) => p === "Sales" || p === "Project").map(([k]) => k);
+const LAUNCH = STAGES.filter(([, , p]) => p === "Launch").map(([k]) => k);
+/* how far along the sales and project steps a lead is, 0 = nothing ticked.
+   Any launch step ticked means the project is done. */
+function progress(s) {
+  if (LAUNCH.some(k => s.stages[k])) return LINEAR.length;
+  return LINEAR.reduce((r, k, i) => s.stages[k] ? i + 1 : r, 0);
+}
+const reached = (s, k) => progress(s) >= LINEAR.indexOf(k) + 1;
+const latest = (s, ...ks) => ks.map(k => s.stages[k]).filter(Boolean).sort().pop() || "";
+const dead = s => !!s.stages.closed_inactive || ["lost", "not_interested"].includes(s.status);
+const atStep = (s, ...ks) => ks.includes(LINEAR[progress(s) - 1]);
+
+/* Each list says what to do next. `since` returns when the lead landed there
+   (null keeps it out); after `late` days it's flagged overdue. */
+const TODO = [
+  { phase: "Sales", title: "Call back", late: 0, hint: "Callback date is today or earlier.",
+    since: s => dueNow(s) ? s.callback : null },
+  { phase: "Sales", title: "Interested, offer a demo", late: 2,
+    hint: "Marked interested or meeting set, no step ticked yet.",
+    since: s => ["interested", "meeting"].includes(s.status) && !progress(s) && !dead(s)
+      ? s.log[0]?.t || "" : null },
+  { phase: "Sales", title: "Make and send the demo", late: 2, hint: "They asked for a demo.",
+    since: s => atStep(s, "demo_requested") ? s.stages.demo_requested : null },
+  { phase: "Sales", title: "Ask what they think of the demo", late: 3, hint: "Demo sent, no offer yet.",
+    since: s => atStep(s, "demo_sent") ? s.stages.demo_sent : null },
+  { phase: "Sales", title: "Follow up on the offer", late: 4, hint: "Offer sent, no yes yet.",
+    since: s => atStep(s, "offer_sent", "followup_1", "followup_2")
+      ? latest(s, "offer_sent", "followup_1", "followup_2") : null,
+    note: s => s.stages.followup_2 ? "2 follow-ups sent" : s.stages.followup_1 ? "1 follow-up sent" : "" },
+  { phase: "Sales", title: "Ask for 50% upfront", late: 1, hint: "They said yes.",
+    since: s => atStep(s, "agreed") ? s.stages.agreed : null },
+  { phase: "Project", title: "Waiting for 50% upfront", late: 5, hint: "Asked, not paid yet.",
+    since: s => atStep(s, "deposit_asked") ? s.stages.deposit_asked : null },
+  { phase: "Project", title: "Build the site", late: 14, hint: "Deposit paid, project not completed.",
+    since: s => atStep(s, "deposit_paid", "in_progress") ? s.stages.deposit_paid || s.stages.in_progress : null,
+    note: s => s.stages.in_progress ? "started" : "not started" },
+  { phase: "Launch", title: "Ask for the other 50%", late: 1, hint: "Project completed, final payment not asked for.",
+    since: s => progress(s) === LINEAR.length && !s.stages.final_asked && !s.stages.paid_full
+      ? s.stages.completed || "" : null },
+  { phase: "Launch", title: "Waiting for the other 50%", late: 5, hint: "Asked, not paid in full yet.",
+    since: s => s.stages.final_asked && !s.stages.paid_full ? s.stages.final_asked : null },
+  { phase: "Launch", title: "Waiting for the domain", late: 5, hint: "Project completed, domain not ready.",
+    since: s => progress(s) === LINEAR.length && !s.stages.domain ? s.stages.completed || "" : null },
+  { phase: "Launch", title: "Waiting for hosting", late: 5, hint: "Project completed, hosting not ready.",
+    since: s => progress(s) === LINEAR.length && !s.stages.hosting ? s.stages.completed || "" : null },
+  { phase: "Launch", title: "Publish the site", late: 1, hint: "Domain and hosting ready, not published.",
+    since: s => s.stages.domain && s.stages.hosting && !s.stages.published ? latest(s, "domain", "hosting") : null },
+  { phase: "Done", title: "Published and paid in full", late: Infinity, hint: "Finished. Newest first.",
+    since: s => s.stages.published && s.stages.paid_full ? latest(s, "published", "paid_full") : null },
+];
+
+/* cumulative: a lead counts for every step up to the furthest one it reached.
+   Published and paid in full happen in either order, so both compare to completed. */
+const FUNNEL = [
+  ["Called",            s => s.status !== "new" || progress(s) > 0],
+  ["Interested",        s => ["interested", "meeting", "won"].includes(s.status) || progress(s) > 0],
+  ["Demo requested",    s => reached(s, "demo_requested")],
+  ["Demo sent",         s => reached(s, "demo_sent")],
+  ["Offer sent",        s => reached(s, "offer_sent")],
+  ["Said yes",          s => reached(s, "agreed")],
+  ["50% upfront paid",  s => reached(s, "deposit_paid")],
+  ["Project completed", s => reached(s, "completed")],
+  ["Published",         s => !!s.stages.published, "Project completed"],
+  ["Paid in full",      s => !!s.stages.paid_full, "Project completed"],
+];
+
+/* what got done today, this week, this month. Calls are status changes in the log. */
+const ACTIVITY = [
+  ["Calls logged",     s => s.log.filter(e => e.m.startsWith("Status →") && !e.m.endsWith("New")).map(e => e.t)],
+  ["Demos sent",       s => [s.stages.demo_sent]],
+  ["Offers sent",      s => [s.stages.offer_sent]],
+  ["Follow-ups sent",  s => [s.stages.followup_1, s.stages.followup_2]],
+  ["Said yes",         s => [s.stages.agreed]],
+  ["50% upfront paid", s => [s.stages.deposit_paid]],
+  ["Published",        s => [s.stages.published]],
+  ["Paid in full",     s => [s.stages.paid_full]],
+];
+
+/* whole days since an ISO time or a yyyy-mm-dd date, by the local calendar */
+function daysSince(t) {
+  if (!t) return null;
+  const d = new Date(t.length === 10 ? t + "T00:00" : t);
+  return Math.round((new Date(today() + "T00:00") - new Date(d.toLocaleDateString("sv-SE") + "T00:00")) / 864e5);
+}
+
+let leadById = new Map();
+const F = document.getElementById("funnel");
+function renderFunnel() {
+  els.datasub.textContent = `pipeline across all cities · ${LEADS.length} leads on the list`;
+  // leads that dropped off the list still have their notes in crm, so count them too
+  const people = Object.entries(store.byId).filter(([, s]) => touched(s)).map(([id, s]) => {
+    const l = leadById.get(id);
+    return { id, s, name: l?.name || s.name || id, city: l?.city || "", phone: l?.phone || "", gone: !l };
+  });
+
+  const counts = FUNNEL.map(([label, test, base], i) =>
+    [label, people.filter(p => test(p.s)).length, base || FUNNEL[i - 1]?.[0]]);
+  const top = Math.max(counts[0][1], 1);
+  const bars = counts.map(([label, n, base]) => {
+    const prev = base ? counts.find(c => c[0] === base)[1] : LEADS.length;
+    const pct = prev ? Math.round(n / prev * 100) : 0;
+    const of = base ? `of ${base.toLowerCase()}` : "of the leads on the list";
+    return `<div class="fbar" title="${n} ${label.toLowerCase()}, ${pct}% ${of}">
+      <span class="lbl">${label}</span>
+      <span class="track"><span class="fill" data-w="${n / top * 100}"></span></span>
+      <span class="val">${n}<small>${pct}%</small></span></div>`;
+  }).join("");
+
+  const windows = [["Today", 1], ["7 days", 7], ["30 days", 30]];
+  const cutoff = days => { const d = new Date(today() + "T00:00"); d.setDate(d.getDate() - days + 1); return d; };
+  const act = ACTIVITY.map(([label, times]) => {
+    const all = people.flatMap(p => times(p.s)).filter(Boolean).map(t => new Date(t));
+    return `<tr><td>${label}</td>` + windows.map(([, days]) => {
+      const n = all.filter(t => t >= cutoff(days)).length;
+      return `<td class="num ${n ? "" : "zero"}">${n}</td>`;
+    }).join("") + "</tr>";
+  }).join("");
+
+  const bucket = b => {
+    // closed, lost and not-interested leads need nothing more from you
+    const rows = people.filter(p => b.phase === "Done" || !dead(p.s))
+      .map(p => ({ ...p, since: b.since(p.s) })).filter(p => p.since != null)
+      .map(p => ({ ...p, days: daysSince(p.since) }))
+      .sort((x, y) => b.late === Infinity ? (y.since > x.since ? 1 : -1) : (y.days ?? -1) - (x.days ?? -1));
+    const over = rows.filter(r => r.days > b.late).length;
+    return `<section class="bucket ${rows.length ? "" : "none"}">
+      <div class="bh"><b>${b.title}</b><span class="n">${rows.length}</span>
+        ${over ? `<span class="over">⚠ ${over} overdue</span>` : ""}</div>
+      <p class="hint">${b.hint}${isFinite(b.late) && b.late ? ` Overdue after ${b.late} day${b.late > 1 ? "s" : ""}.` : ""}</p>
+      ${rows.length ? `<ul>${rows.map(r => `
+        <li data-id="${esc(r.id)}" class="${r.days > b.late ? "late" : ""} ${r.id === selectedId ? "sel" : ""}">
+          <span class="nm">${esc(r.name)}${r.gone ? ` <small>(off the list)</small>` : ""}</span>
+          <span class="age">${ageText(r.days, b)}</span>
+          <span class="ct">${[esc(r.city), r.phone ? `<a href="tel:${esc(r.phone.replace(/\s/g, ""))}">${esc(r.phone)}</a>` : "",
+            esc(b.note?.(r.s) || "")].filter(Boolean).join(" · ")}</span>
+        </li>`).join("")}</ul>` : ""}
+    </section>`;
+  };
+  const lists = [...new Set(TODO.map(b => b.phase))].map(ph =>
+    `<h3 class="fphase">${ph}</h3><div class="buckets">${TODO.filter(b => b.phase === ph).map(bucket).join("")}</div>`
+  ).join("");
+
+  F.innerHTML = `<div class="fgrid">
+      <section class="fcard"><h3>Funnel</h3>
+        <p class="hint">Leads that reached each step, and the share of the step before it. Hover a bar for details.</p>${bars}</section>
+      <section class="fcard"><h3>Done lately</h3>
+        <table class="act"><thead><tr><th></th>${windows.map(([l]) => `<th class="num">${l}</th>`).join("")}</tr></thead>
+        <tbody>${act}</tbody></table></section>
+    </div>${lists}`;
+  // the page's CSP blocks style="" attributes, so widths go through the DOM
+  F.querySelectorAll(".fill").forEach(el => el.style.width = el.dataset.w + "%");
+}
+function ageText(days, b) {
+  if (days == null) return "";
+  if (b.late === 0) return days > 0 ? `${days}d late` : "today";
+  return days ? `${days}d` : "today";
+}
+F.addEventListener("click", e => {
+  if (e.target.closest("a")) return;
+  const li = e.target.closest("li[data-id]");
+  if (!li) return;
+  if (!leadById.has(li.dataset.id)) return toast("This lead is no longer on the list");
+  openDrawer(li.dataset.id);
+});
+
+function setView(v) {
+  view = v; lsSet("ro-leads-view", v);
+  document.body.classList.toggle("view-funnel", v === "funnel");
+  document.getElementById("vList").classList.toggle("on", v === "list");
+  document.getElementById("vFunnel").classList.toggle("on", v === "funnel");
+  F.hidden = v !== "funnel";
+  render();
+}
+document.getElementById("vList").onclick = () => setView("list");
+document.getElementById("vFunnel").onclick = () => setView("funnel");
 
 /* ---------- drawer ---------- */
 const D = Object.fromEntries(["drawer","dName","dMeta","dActions","dStatus","dStages","dCallback",
@@ -497,7 +692,8 @@ function renderStatusGrid(s) {
   });
 }
 function renderStages(s) {
-  D.dStages.innerHTML = STAGES.map(([k, label]) =>
+  D.dStages.innerHTML = STAGES.map(([k, label, phase], i) =>
+    (phase !== STAGES[i - 1]?.[2] ? `<div class="phase">${phase || "Or"}</div>` : "") +
     `<label class="${s.stages[k] ? "on" : ""}"><input type="checkbox" data-stage="${k}" ${s.stages[k] ? "checked" : ""}>` +
     `<span>${label}</span><time>${fmtT(s.stages[k])}</time></label>`).join("");
   D.dStages.querySelectorAll("input").forEach(box => box.onchange = () => {
