@@ -889,8 +889,9 @@ document.getElementById("importFile").onchange = async e => {
   await loadCrm();
   const lastAt = s => Math.max(f.lastModified || 0, ...[...(Array.isArray(s.log) ? s.log : []).map(e => e?.t),
     ...Object.values(s.stages && typeof s.stages === "object" ? s.stages : {})].map(t => Date.parse(t) || 0));
-  const newer = entries.filter(([id, s]) => ver[id] && Date.parse(ver[id]) > lastAt(s));
+  let kept = entries.length;
   entries = entries.filter(([id, s]) => !(ver[id] && Date.parse(ver[id]) > lastAt(s)));
+  kept -= entries.length;
   const now = new Date().toISOString();
   const rows = entries.map(([id, s]) => ({ id, updated_at: now, state: {
     status: ST[s.status] ? s.status : "new", notes: s.notes || "", callback: s.callback || "",
@@ -898,14 +899,25 @@ document.getElementById("importFile").onchange = async e => {
     ...(s.phone ? { phone: String(s.phone) } : {}),
     stages: s.stages && typeof s.stages === "object"
       ? Object.fromEntries(Object.entries(s.stages).filter(([k]) => STG[k])) : {} } }));
-  for (let i = 0; i < rows.length; i += 500) {
-    const { error } = await sb.from("crm").upsert(rows.slice(i, i + 500));
-    if (error) return toast(`Restore stopped after ${i} entries: ${error.message}`);
+  /* the same conditional write as save(), so a lead another device saves while
+     this runs misses here and keeps what it has */
+  let done = 0, failed = null;
+  for (let i = 0; i < rows.length && !failed; i += 10) {
+    const res = await Promise.all(rows.slice(i, i + 10).map(r => ver[r.id]
+      ? sb.from("crm").update({ state: r.state, updated_at: r.updated_at })
+          .eq("id", r.id).eq("updated_at", ver[r.id]).select("updated_at")
+      : sb.from("crm").insert(r).select("updated_at")));
+    for (const { data, error } of res) {
+      if (error && error.code !== "23505") failed = error;
+      else if (!error && data.length) done++;
+      else kept++;
+    }
   }
   await loadCrm();
   if (openLead) openDrawer(openLead.id); else render();
-  toast(`Restored ${rows.length} leads' notes` +
-        (newer.length ? `; kept ${newer.length} that changed after this backup` : ""));
+  if (failed) return toast(`Restore stopped after ${done} entries: ${failed.message}`);
+  toast(`Restored ${done} leads' notes` +
+        (kept ? `; kept ${kept} that changed after this backup` : ""));
 };
 function download(blob, name) {
   const a = document.createElement("a");
