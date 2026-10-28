@@ -71,10 +71,11 @@ const WEB_CHECK = {
    nobody has touched exist only in memory and are never written. */
 let store = { byId: {} };
 
+const blank = name => ({ status: "new", notes: "", callback: "", log: [], stages: {}, name });
 function stateOf(lead) {
   let s = store.byId[lead.id];
   if (!s) {
-    s = { status: "new", notes: "", callback: "", log: [], stages: {}, name: lead.name };
+    s = blank(lead.name);
     store.byId[lead.id] = s;
   }
   return s;
@@ -87,24 +88,68 @@ const phoneOf = l => stateOf(l).phone || l.phone || "";
 /* rows saved before stages existed have none */
 const normState = s => ({ ...s, stages: s.stages && typeof s.stages === "object" ? s.stages : {} });
 
-/* Writes for one lead go out in order, each carrying the state at the moment it
-   was made. A failed write stays listed under the "not saved" button until a
+/* Writes for one lead go out in order, each carrying the lead's state when it
+   goes out. A failed write stays listed under the "not saved" button until a
    retry gets through. */
 const queue = {}, unsaved = new Set(), writing = {};
 /* editSeq counts saves; editedAt holds the count at each lead's last save, so a
    refresh can tell which leads were edited after its fetch began */
 const editedAt = {};
 let inflight = 0, editSeq = 0;
+/* base[id] is the lead's state as this tab last read or wrote it, ver[id] that
+   row's updated_at. A write only lands if the row still has ver[id]. If another
+   device saved the lead in between, the write misses: the tab fetches the newer
+   row, lays the fields it changed since base over it, and writes again. Without
+   this, a device that hadn't polled yet wrote back its old copy of the fields
+   it didn't touch. */
+const base = {}, ver = {};
+const clone = s => JSON.parse(JSON.stringify(s));
+const rowState = s => ({ status: s.status, notes: s.notes, callback: s.callback,
+                         log: s.log, stages: s.stages, name: s.name, phone: s.phone });
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+function mergeInto(local, from, remote) {
+  for (const k of new Set([...Object.keys(local), ...Object.keys(remote)])) {
+    if (k === "log") {
+      const seen = new Set(), all = [...(local.log || []), ...(remote.log || [])];
+      local.log = all.filter(e => !seen.has(e.t + e.m) && seen.add(e.t + e.m))
+        .sort((a, b) => b.t.localeCompare(a.t)).slice(0, 60);
+    } else if (k === "stages") {
+      const st = { ...remote.stages }, mine = local.stages || {}, was = from.stages || {};
+      for (const s of new Set([...Object.keys(mine), ...Object.keys(was)]))
+        if (!same(mine[s], was[s])) { if (mine[s]) st[s] = mine[s]; else delete st[s]; }
+      local.stages = st;
+    } else if (same(local[k], from[k])) {
+      if (remote[k] === undefined) delete local[k]; else local[k] = remote[k];
+    }
+  }
+}
+async function write(id) {
+  for (let tries = 0; tries < 5; tries++) {
+    const state = clone(rowState(store.byId[id])), updated_at = new Date().toISOString();
+    const { data, error } = ver[id]
+      ? await sb.from("crm").update({ state, updated_at }).eq("id", id).eq("updated_at", ver[id]).select("updated_at")
+      : await sb.from("crm").insert({ id, state, updated_at }).select("updated_at");
+    // 23505: another device created the row first
+    if (error && error.code !== "23505") return error;
+    if (!error && data.length) { base[id] = state; ver[id] = data[0].updated_at; return null; }
+    const got = await sb.from("crm").select("state, updated_at").eq("id", id);
+    if (got.error) return got.error;
+    if (!got.data.length) { delete ver[id]; continue; }
+    const remote = normState(got.data[0].state);
+    // a lead this tab has never seen saved started out blank, so only changes from blank are its own
+    mergeInto(store.byId[id], base[id] || blank(store.byId[id].name), remote);
+    base[id] = remote; ver[id] = got.data[0].updated_at;
+    if (openLead?.id === id) refreshDrawer();
+    render();
+  }
+  return { message: "another device kept saving this lead, try again" };
+}
 function save(id) {
-  const s = store.byId[id];
   editedAt[id] = ++editSeq;
-  const row = { id, state: { status: s.status, notes: s.notes, callback: s.callback,
-                             log: s.log, stages: s.stages, name: s.name, phone: s.phone },
-                updated_at: new Date().toISOString() };
   inflight++;
   writing[id] = (writing[id] || 0) + 1;
   queue[id] = (queue[id] || Promise.resolve()).then(async () => {
-    const { error } = await sb.from("crm").upsert(row);
+    const error = await write(id);
     if (error) {
       console.error("save failed", id, error);
       unsaved.add(id);
@@ -152,8 +197,9 @@ async function fetchAll(table, cols, order) {
   }
 }
 async function loadCrm() {
-  const rows = await fetchAll("crm", "id, state", "id");
+  const rows = await fetchAll("crm", "id, state, updated_at", "id");
   store = { byId: Object.fromEntries(rows.map(r => [r.id, normState(r.state)])) };
+  for (const r of rows) { base[r.id] = normState(clone(r.state)); ver[r.id] = r.updated_at; }
 }
 
 /* Pull what other devices saved. A lead with a write of this tab's still on its
@@ -167,12 +213,13 @@ async function refreshCrm() {
   refreshing = true;
   try {
     const startSeq = editSeq;
-    const rows = await fetchAll("crm", "id, state", "id");
+    const rows = await fetchAll("crm", "id, state, updated_at", "id");
     const changed = [];
     for (const r of rows) {
       if (writing[r.id] || unsaved.has(r.id) || pendingNotes?.lead.id === r.id) continue;
       if ((editedAt[r.id] || 0) > startSeq) continue;
       const remote = normState(r.state), local = store.byId[r.id];
+      base[r.id] = normState(clone(r.state)); ver[r.id] = r.updated_at;
       if (local && JSON.stringify(local) === JSON.stringify(remote)) continue;
       store.byId[r.id] = remote;
       changed.push(r.id);
@@ -809,7 +856,9 @@ document.getElementById("exportCsv").onclick = () => {
                 "rating","reviews","score","why","status","stage",...STAGES.map(([k]) => k),
                 "callback","notes","mapsUrl"];
   const csv = [cols.join(",")].concat(rows.map(r => cols.map(c => {
-    const v = Array.isArray(r[c]) ? r[c].join("; ") : String(r[c] ?? "");
+    let v = Array.isArray(r[c]) ? r[c].join("; ") : String(r[c] ?? "");
+    // a leading ' keeps a spreadsheet from running a cell as a formula; phone numbers pass as they are
+    if (/^[=@\t\r]/.test(v) || /^[+-]/.test(v) && !/^[+\-\d\s().\/]+$/.test(v)) v = "'" + v;
     return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
   }).join(","))).join("\r\n");
   download(new Blob(["﻿" + csv], { type: "text/csv" }), `ro-leads-${today()}.csv`);
