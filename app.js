@@ -4,7 +4,8 @@
    This file is public: it holds no data and no secret. The publishable key below
    is meant to ship in pages; without a signed-in account listed in app_users,
    the database returns nothing (see supabase/schema.sql). */
-/* GitHub Pages serves this path over plain http too; the sign-in belongs on https */
+/* GitHub Pages enforces https and answers http with a 301 before this script loads.
+   This is a fallback in case that setting is ever turned off. The sign-in belongs on https */
 if (location.protocol === "http:" && !/^(localhost|127\.0\.0\.1)$/.test(location.hostname))
   location.replace("https:" + location.href.slice(5));
 
@@ -90,9 +91,13 @@ const normState = s => ({ ...s, stages: s.stages && typeof s.stages === "object"
    was made. A failed write stays listed under the "not saved" button until a
    retry gets through. */
 const queue = {}, unsaved = new Set(), writing = {};
-let inflight = 0;
+/* editSeq counts saves; editedAt holds the count at each lead's last save, so a
+   refresh can tell which leads were edited after its fetch began */
+const editedAt = {};
+let inflight = 0, editSeq = 0;
 function save(id) {
   const s = store.byId[id];
+  editedAt[id] = ++editSeq;
   const row = { id, state: { status: s.status, notes: s.notes, callback: s.callback,
                              log: s.log, stages: s.stages, name: s.name, phone: s.phone },
                 updated_at: new Date().toISOString() };
@@ -153,16 +158,20 @@ async function loadCrm() {
 
 /* Pull what other devices saved. A lead with a write of this tab's still on its
    way, failed, or notes typed and not yet sent keeps the local copy, so the
-   refresh never undoes an edit made here. Returns the ids that changed. */
+   refresh never undoes an edit made here. So does a lead saved after the fetch
+   began, even if that save already finished: the fetched row predates it.
+   Returns the ids that changed. */
 let refreshing = false;
 async function refreshCrm() {
   if (refreshing || !LEADS.length) return [];
   refreshing = true;
   try {
+    const startSeq = editSeq;
     const rows = await fetchAll("crm", "id, state", "id");
     const changed = [];
     for (const r of rows) {
       if (writing[r.id] || unsaved.has(r.id) || pendingNotes?.lead.id === r.id) continue;
+      if ((editedAt[r.id] || 0) > startSeq) continue;
       const remote = normState(r.state), local = store.byId[r.id];
       if (local && JSON.stringify(local) === JSON.stringify(remote)) continue;
       store.byId[r.id] = remote;
