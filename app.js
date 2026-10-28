@@ -866,6 +866,7 @@ document.getElementById("exportCsv").onclick = () => {
 };
 /* same { byId } format as the offline dashboard's backup, so files work both ways */
 document.getElementById("exportJson").onclick = () => {
+  flushNotes();   // a note typed in the last 800 ms isn't in store yet
   const byId = Object.fromEntries(Object.entries(store.byId).filter(([, s]) => touched(s)));
   download(new Blob([JSON.stringify({ byId }, null, 1)], { type: "application/json" }),
            `ro-leads-backup-${today()}.json`);
@@ -886,6 +887,8 @@ document.getElementById("importFile").onchange = async e => {
      old as the file, or as its newest activity if a copy left the file newer */
   flushNotes();
   await Promise.all(Object.values(queue));
+  // loadCrm below replaces what this tab holds, a change that failed to save included
+  if (unsaved.size) return toast(`${unsaved.size} change(s) not saved yet. Retry them, then restore`);
   await loadCrm();
   const lastAt = s => Math.max(f.lastModified || 0, ...[...(Array.isArray(s.log) ? s.log : []).map(e => e?.t),
     ...Object.values(s.stages && typeof s.stages === "object" ? s.stages : {})].map(t => Date.parse(t) || 0));
