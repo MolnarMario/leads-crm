@@ -22,7 +22,8 @@ const STATUSES = [
   ["meeting",        "📅", "Meeting set"],
   ["won",            "🏆", "Won"],
   ["not_interested", "👎", "Not interested"],
-  ["lost",           "✖", "Lost"],
+  ["has_builder",    "🔨", "Has another builder"],
+  ["lost",          "✖", "Lost"],
 ];
 const ST = Object.fromEntries(STATUSES.map(([k, i, l]) => [k, { icon: i, label: l }]));
 /* Steps after the call, ticked in the detail panel. Each one stores the time it
@@ -77,8 +78,11 @@ function stateOf(lead) {
   }
   return s;
 }
-const touched = s => s.status !== "new" || s.notes || s.callback || s.log?.length ||
+const touched = s => s.status !== "new" || s.notes || s.callback || s.phone || s.log?.length ||
   Object.keys(s.stages || {}).length;
+/* a number typed into the detail panel wins over the one from Google Maps. It
+   lives in crm, not leads, so push_leads.py can't overwrite it */
+const phoneOf = l => stateOf(l).phone || l.phone || "";
 /* rows saved before stages existed have none */
 const normState = s => ({ ...s, stages: s.stages && typeof s.stages === "object" ? s.stages : {} });
 
@@ -90,7 +94,7 @@ let inflight = 0;
 function save(id) {
   const s = store.byId[id];
   const row = { id, state: { status: s.status, notes: s.notes, callback: s.callback,
-                             log: s.log, stages: s.stages, name: s.name },
+                             log: s.log, stages: s.stages, name: s.name, phone: s.phone },
                 updated_at: new Date().toISOString() };
   inflight++;
   writing[id] = (writing[id] || 0) + 1;
@@ -129,7 +133,7 @@ const fmtT = iso => iso ? new Date(iso).toLocaleString(undefined,
 /* local calendar date, matching what <input type="date"> stores (toISOString would be UTC) */
 const today = () => new Date().toLocaleDateString("sv-SE");
 const dueNow = s => s.callback && s.callback <= today() &&
-  !["won", "lost", "not_interested"].includes(s.status) && !s.stages?.closed_inactive;
+  !["won", "lost", "not_interested", "has_builder"].includes(s.status) && !s.stages?.closed_inactive;
 
 /* ---------- loading ---------- */
 /* Supabase returns at most 1000 rows per request */
@@ -357,7 +361,7 @@ els.thead.querySelectorAll("th").forEach(th => th.onclick = () => {
 function enrich(l) {
   const s = stateOf(l);
   const stage = lastStage(s);
-  return { ...l, lead: leadVerdict(l), status: s.status, notes: s.notes,
+  return { ...l, phone: phoneOf(l), lead: leadVerdict(l), status: s.status, notes: s.notes,
            callback: s.callback, updated: s.log[0]?.t || "", due: dueNow(s),
            stage, stageAt: stage ? s.stages[stage] : "" };
 }
@@ -471,7 +475,7 @@ function progress(s) {
 }
 const reached = (s, k) => progress(s) >= LINEAR.indexOf(k) + 1;
 const latest = (s, ...ks) => ks.map(k => s.stages[k]).filter(Boolean).sort().pop() || "";
-const dead = s => !!s.stages.closed_inactive || ["lost", "not_interested"].includes(s.status);
+const dead = s => !!s.stages.closed_inactive || ["lost", "not_interested", "has_builder"].includes(s.status);
 const atStep = (s, ...ks) => ks.includes(LINEAR[progress(s) - 1]);
 
 /* Each list says what to do next. `since` returns when the lead landed there
@@ -554,7 +558,7 @@ function renderFunnel() {
   // leads that dropped off the list still have their notes in crm, so count them too
   const people = Object.entries(store.byId).filter(([, s]) => touched(s)).map(([id, s]) => {
     const l = leadById.get(id);
-    return { id, s, name: l?.name || s.name || id, city: l?.city || "", phone: l?.phone || "", gone: !l };
+    return { id, s, name: l?.name || s.name || id, city: l?.city || "", phone: s.phone || l?.phone || "", gone: !l };
   });
 
   const counts = FUNNEL.map(([label, test, base], i) =>
@@ -639,7 +643,7 @@ document.getElementById("vList").onclick = () => setView("list");
 document.getElementById("vFunnel").onclick = () => setView("funnel");
 
 /* ---------- drawer ---------- */
-const D = Object.fromEntries(["drawer","dName","dMeta","dActions","dStatus","dStages","dCallback",
+const D = Object.fromEntries(["drawer","dName","dMeta","dActions","dPhone","dStatus","dStages","dCallback",
   "dNotes","dSaved","dInfo","dLog","dClose","dEmpty","dContent"].map(id => [id, document.getElementById(id)]));
 let openLead = null, notesTimer = null;
 
@@ -653,32 +657,39 @@ function openDrawer(id) {
   D.dMeta.textContent = `${(CAT_INFO[l.category] || { label: l.category }).label} · ` +
     `${l.address || "no address"} · ${l.city}` +
     (l.county && l.county !== l.city ? ` (${l.county})` : "");
+  D.dPhone.value = phoneOf(l);
+  D.dCallback.value = s.callback || "";
+  D.dNotes.value = s.notes || "";
+  renderActions(l); renderInfo(l);
+  renderStatusGrid(s); renderStages(s); renderLog(s);
+  D.dEmpty.hidden = true; D.dContent.hidden = false;
+  D.drawer.classList.add("open");
+  render();
+}
+function renderActions(l) {
+  const phone = phoneOf(l);
   D.dActions.innerHTML =
-    (l.phone ? `<a class="call" href="tel:${esc(l.phone.replace(/\s/g, ""))}">📞 Call ${esc(l.phone)}</a>` : "") +
+    (phone ? `<a class="call" href="tel:${esc(phone.replace(/\s/g, ""))}">📞 Call ${esc(phone)}</a>` : "") +
     `<a href="${esc(mapsLink(l))}" target="_blank" rel="noopener">🗺 Maps</a>` +
     (pinLink(l) ? `<a href="${esc(pinLink(l))}" target="_blank" rel="noopener" title="Exact location pin, in case the name search finds the wrong place">📍 Pin</a>` : "") +
     `<a href="${esc(searchLink(l))}" target="_blank" rel="noopener">🔎 Google them</a>` +
     (safeUrl(l.website) ? `<a href="${esc(l.website)}" target="_blank" rel="noopener">📱 Listed link</a>` : "") +
     (safeUrl(l.possibleSite) ? `<a href="${esc(l.possibleSite)}" target="_blank" rel="noopener">❓ Possible site</a>` : "");
-  D.dCallback.value = s.callback || "";
-  D.dNotes.value = s.notes || "";
-  const lv = leadVerdict(l);
+}
+function renderInfo(l) {
+  const lv = leadVerdict(l), mine = stateOf(l).phone;
   D.dInfo.innerHTML = [
     ["Website", `${LV[lv].icon} ${LV[lv].label}` + (l.website ? ` (${l.website})` : "")],
     ["Web check", WEB_CHECK[l.webCheck || ""] || l.webCheck],
     ["Rating", l.rating ? `${l.rating} ★ (${l.reviews} reviews)` : "n/a"],
     ["Close score", l.score != null ? `${l.score} / 100` : "n/a"],
     ["Google type", l.primaryType || "n/a"],
-    ["Phone", l.phone || "n/a"],
+    ["Phone", mine ? `${mine} (added by you; Google Maps has ${l.phone || "none"})` : l.phone || "n/a"],
     ["First seen", l.firstSeen || "n/a"],
     ["Last seen in a search", l.lastSeen || "n/a"],
   ].map(([k, v]) => `<div><b>${k}</b> ${esc(v)}</div>`).join("") +
     (l.why?.length ? `<div><b>Why this score</b><ul class="why">` +
       l.why.map(w => `<li>${esc(w)}</li>`).join("") + `</ul></div>` : "");
-  renderStatusGrid(s); renderStages(s); renderLog(s);
-  D.dEmpty.hidden = true; D.dContent.hidden = false;
-  D.drawer.classList.add("open");
-  render();
 }
 function renderStatusGrid(s) {
   D.dStatus.innerHTML = STATUSES.map(([k, icon, label]) =>
@@ -710,6 +721,8 @@ function renderStages(s) {
 function refreshDrawer() {
   const s = stateOf(openLead);
   renderStatusGrid(s); renderStages(s); renderLog(s);
+  renderActions(openLead); renderInfo(openLead);
+  if (document.activeElement !== D.dPhone) D.dPhone.value = phoneOf(openLead);
   D.dCallback.value = s.callback || "";
   if (document.activeElement !== D.dNotes) D.dNotes.value = s.notes || "";
 }
@@ -732,6 +745,18 @@ D.dCallback.onchange = () => {
   logIt(s, s.callback ? `Callback set for ${s.callback}` : "Callback cleared");
   save(openLead.id); renderLog(s); render();
 };
+/* clearing the box goes back to the Maps number */
+D.dPhone.onchange = () => {
+  const l = openLead, s = stateOf(l), v = D.dPhone.value.trim();
+  const next = v && v !== l.phone ? v : undefined;
+  if (next === s.phone) return void (D.dPhone.value = phoneOf(l));
+  if (next) s.phone = next; else delete s.phone;
+  const msg = next ? `Phone set to ${next}` : l.phone ? "Phone back to the Maps number" : "Phone removed";
+  logIt(s, msg); save(l.id);
+  D.dPhone.value = phoneOf(l);
+  renderActions(l); renderInfo(l); renderLog(s); render(); toast(msg);
+};
+D.dPhone.onkeydown = e => { if (e.key === "Enter") D.dPhone.blur(); };
 /* notes save 800 ms after typing stops; the pending save is bound to the lead
    being typed on, and flushed before the drawer switches to another lead */
 let pendingNotes = null;
@@ -803,6 +828,7 @@ document.getElementById("importFile").onchange = async e => {
   const rows = entries.map(([id, s]) => ({ id, updated_at: now, state: {
     status: ST[s.status] ? s.status : "new", notes: s.notes || "", callback: s.callback || "",
     log: Array.isArray(s.log) ? s.log : [], name: s.name || "",
+    ...(s.phone ? { phone: String(s.phone) } : {}),
     stages: s.stages && typeof s.stages === "object"
       ? Object.fromEntries(Object.entries(s.stages).filter(([k]) => STG[k])) : {} } }));
   for (let i = 0; i < rows.length; i += 500) {

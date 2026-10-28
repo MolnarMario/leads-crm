@@ -27,7 +27,7 @@ header {
 header h1 { font-size: 17px; margin: 0; font-weight: 650; }
 header .sub { color: var(--muted); font-size: 12.5px; }
 header .spacer { flex: 1; }
-button, select, input[type=text], input[type=date] {
+button, select, input[type=text], input[type=date], input[type=tel] {
   font: inherit; color: var(--ink); background: var(--surface);
   border: 1px solid var(--baseline); border-radius: 8px; padding: 6px 10px;
 }
@@ -134,6 +134,7 @@ html.dark .chip-default         { background: var(--chip); color: var(--ink-2); 
 .st-meeting    { color: var(--accent); border-color: var(--accent); }
 .st-won        { color: #fff; background: var(--good); border-color: var(--good); }
 .st-not_interested { color: var(--critical-text); border-color: var(--critical); }
+.st-has_builder { color: var(--ink-2); border-color: var(--critical); }
 .st-lost       { color: var(--critical-text); border-color: var(--critical); }
 .lv-none           { color: var(--good-text); border-color: var(--good); }
 .lv-social         { color: var(--accent); border-color: var(--accent); }
@@ -205,6 +206,7 @@ textarea {
   background: var(--page); border: 1px solid var(--baseline);
   border-radius: 8px; padding: 8px 10px; resize: vertical;
 }
+#dPhone { width: 100%; font-variant-numeric: tabular-nums; }
 .saved { color: var(--good-text); font-size: 12px; visibility: hidden; }
 .log { list-style: none; margin: 0; padding: 0; font-size: 12.5px; }
 .log li { padding: 5px 0; border-bottom: 1px dashed var(--grid); color: var(--ink-2); }
