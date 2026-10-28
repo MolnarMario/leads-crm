@@ -197,9 +197,16 @@ async function fetchAll(table, cols, order) {
   }
 }
 async function loadCrm() {
+  const startSeq = editSeq;
   const rows = await fetchAll("crm", "id, state, updated_at", "id");
+  // same rule as refreshCrm: a lead with a save still out, failed, or made during the fetch keeps its local copy
+  const prev = store.byId, mine = id => prev[id] &&
+    (writing[id] || unsaved.has(id) || (editedAt[id] || 0) > startSeq);
   store = { byId: Object.fromEntries(rows.map(r => [r.id, normState(r.state)])) };
-  for (const r of rows) { base[r.id] = normState(clone(r.state)); ver[r.id] = r.updated_at; }
+  for (const r of rows)
+    if (mine(r.id)) store.byId[r.id] = prev[r.id];
+    else { base[r.id] = normState(clone(r.state)); ver[r.id] = r.updated_at; }
+  for (const id of Object.keys(prev)) if (!store.byId[id] && mine(id)) store.byId[id] = prev[id];
 }
 
 /* Pull what other devices saved. A lead with a write of this tab's still on its
