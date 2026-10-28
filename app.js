@@ -858,7 +858,7 @@ document.getElementById("exportCsv").onclick = () => {
   const csv = [cols.join(",")].concat(rows.map(r => cols.map(c => {
     let v = Array.isArray(r[c]) ? r[c].join("; ") : String(r[c] ?? "");
     // a leading ' keeps a spreadsheet from running a cell as a formula; phone numbers pass as they are
-    if (/^[=@\t\r]/.test(v) || /^[+-]/.test(v) && !/^[+\-\d\s().\/]+$/.test(v)) v = "'" + v;
+    if (/^[=@\t\r\n]/.test(v) || /^[+-]/.test(v) && !/^[+\-\d\s().\/]+$/.test(v)) v = "'" + v;
     return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
   }).join(","))).join("\r\n");
   download(new Blob(["﻿" + csv], { type: "text/csv" }), `ro-leads-${today()}.csv`);
@@ -882,6 +882,15 @@ document.getElementById("importFile").onchange = async e => {
     // the offline dashboard stored an empty entry for every lead it rendered
     entries = Object.entries(data.byId).filter(([, s]) => s && touched(s));
   } catch (err) { return toast("Could not read that backup file"); }
+  /* a lead saved after the backup was made keeps what it has. The backup is as
+     old as the file, or as its newest activity if a copy left the file newer */
+  flushNotes();
+  await Promise.all(Object.values(queue));
+  await loadCrm();
+  const lastAt = s => Math.max(f.lastModified || 0, ...[...(Array.isArray(s.log) ? s.log : []).map(e => e?.t),
+    ...Object.values(s.stages && typeof s.stages === "object" ? s.stages : {})].map(t => Date.parse(t) || 0));
+  const newer = entries.filter(([id, s]) => ver[id] && Date.parse(ver[id]) > lastAt(s));
+  entries = entries.filter(([id, s]) => !(ver[id] && Date.parse(ver[id]) > lastAt(s)));
   const now = new Date().toISOString();
   const rows = entries.map(([id, s]) => ({ id, updated_at: now, state: {
     status: ST[s.status] ? s.status : "new", notes: s.notes || "", callback: s.callback || "",
@@ -895,7 +904,8 @@ document.getElementById("importFile").onchange = async e => {
   }
   await loadCrm();
   if (openLead) openDrawer(openLead.id); else render();
-  toast(`Restored ${rows.length} leads' notes`);
+  toast(`Restored ${rows.length} leads' notes` +
+        (newer.length ? `; kept ${newer.length} that changed after this backup` : ""));
 };
 function download(blob, name) {
   const a = document.createElement("a");
