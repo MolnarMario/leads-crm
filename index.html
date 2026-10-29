@@ -50,7 +50,9 @@
 
 <div class="filters">
   <select id="fCity" title="Search area: a box around the city centre, so nearby villages are included"></select>
-  <input type="text" id="q" placeholder="Search name / phone / address…">
+  <!-- the one filter the funnel view keeps -->
+  <input type="search" id="q" placeholder="Search name, phone or address…" aria-label="Search by name, phone or address">
+  <button id="qMore" hidden title="The city or another filter hides these matches. Click to clear the filters and keep the search"></button>
   <select id="fCat"></select>
   <select id="fLead">
     <option value="">Website: all</option>

@@ -27,7 +27,7 @@ header {
 header h1 { font-size: 17px; margin: 0; font-weight: 650; }
 header .sub { color: var(--muted); font-size: 12.5px; }
 header .spacer { flex: 1; }
-button, select, input[type=text], input[type=date], input[type=tel] {
+button, select, input[type=search], input[type=date], input[type=tel] {
   font: inherit; color: var(--ink); background: var(--surface);
   border: 1px solid var(--baseline); border-radius: 8px; padding: 6px 10px;
 }
@@ -50,7 +50,8 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
   display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
   padding: 10px 20px;
 }
-.filters input[type=text] { min-width: 220px; flex: 0 1 280px; }
+.filters input[type=search] { min-width: 220px; flex: 0 1 280px; }
+#qMore { border-color: var(--accent); color: var(--accent); }
 .filters .count { color: var(--muted); font-size: 12.5px; margin-left: auto; }
 .wrap { padding: 0 20px 20px; }
 .layout { display: flex; gap: 14px; align-items: stretch; }
@@ -254,9 +255,9 @@ textarea {
 .views button + button { border-left: 1px solid var(--baseline); }
 .views button.on { background: var(--accent); color: #fff; font-weight: 600; }
 
-/* funnel view: the table and its filters step aside, the drawer stays */
-body.view-funnel .kpis, body.view-funnel .filters, body.view-funnel .tablebox { display: none; }
-body.view-funnel .wrap { padding-top: 14px; }
+/* funnel view: the table and its filters step aside, the search box and the drawer stay */
+body.view-funnel .kpis, body.view-funnel .tablebox,
+body.view-funnel .filters > :not(#q) { display: none; }
 @media (min-width: 981px) {
   body.view-funnel #drawer { max-height: calc(100vh - 90px); position: sticky; top: 76px; align-self: flex-start; }
 }
@@ -296,6 +297,8 @@ table.act td.zero { color: var(--muted); }
 .bucket .hint { margin: 2px 0 6px !important; }
 .bucket.none { opacity: .55; }
 .bucket.none .hint { margin-bottom: 0 !important; }
+.bucket.found { border-color: var(--accent); margin-bottom: 12px; }
+.bucket.found .hint button { padding: 1px 8px; margin-left: 4px; }
 .bucket ul { list-style: none; margin: 0 -6px; padding: 0; max-height: 320px; overflow: hidden auto; }
 .bucket li {
   display: grid; grid-template-columns: 1fr auto; column-gap: 8px;

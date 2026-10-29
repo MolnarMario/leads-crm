@@ -332,9 +332,47 @@ function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return n
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
 
 /* ---------- filters & sorting ---------- */
-const els = Object.fromEntries(["q","fCity","fCat","fLead","fSort","fStatus","fStage","count","kpis",
+const els = Object.fromEntries(["q","qMore","fCity","fCat","fLead","fSort","fStatus","fStage","count","kpis",
   "thead","tbody","empty","datasub"].map(id => [id, document.getElementById(id)]));
 let sortKey = "_rank", sortDir = 1, selectedId = null, kpiFilter = null;
+
+/* One search box serves both views. Every word typed has to appear in the name
+   or address, in any order, ignoring accents and punctuation: "smile dental"
+   finds "Dental-Smile S.R.L.". A query of digits and phone punctuation also
+   checks the phone numbers digit by digit, reading +40 and 0040 as the leading 0,
+   so "+40 744 123 456", "0744-123-456" and "744 123" all find "0744 123 456".
+   Returns null when there is nothing to search for. */
+const compact = s => strip(s).replace(/[^a-z0-9]/g, "");
+const dialDigits = p => String(p || "").replace(/^\s*(\+|00)\s*40/, "0").replace(/\D/g, "")
+  .replace(/^40(?=\d{9}$)/, "0");
+function searcher(raw) {
+  const q = raw.trim();
+  const words = strip(q).split(/\s+/).map(compact).filter(Boolean);
+  if (!words.length) return null;
+  const dial = /^[+\d\s().\/-]+$/.test(q) ? dialDigits(q) : "";
+  return (name, address, ...phones) => {
+    if (dial && phones.some(p => dialDigits(p).includes(dial))) return true;
+    // street numbers would turn up for every phone fragment, so a number only checks the name
+    const hay = compact(name) + " " + (dial ? "" : compact(address));
+    return words.every(w => hay.includes(w));
+  };
+}
+/* both numbers count: the one typed into the detail panel and the one on Maps */
+const leadHit = (find, l) => find(l.name, l.address, stateOf(l).phone, l.phone);
+/* the city and the other filters can hide the business you're looking for */
+function showAllMatches() {
+  els.fCity.value = ""; lsSet("ro-leads-city", "");
+  [els.fCat, els.fLead, els.fStatus, els.fStage].forEach(el => el.value = "");
+  kpiFilter = null;
+  setView("list");
+}
+els.qMore.onclick = showAllMatches;
+/* Escape empties the search box before it closes the detail panel */
+els.q.addEventListener("keydown", e => {
+  if (e.key !== "Escape" || !els.q.value) return;
+  e.preventDefault(); e.stopPropagation();
+  els.q.value = ""; render();
+});
 
 /* keys match CATEGORIES in config.py */
 const CAT_INFO = {
@@ -430,10 +468,8 @@ function enrich(l) {
 }
 /* skipCat leaves out the business type filter, so the dropdown can count each type */
 function filtered(skipCat) {
-  const q = strip(els.q.value.trim());
-  return cityLeads().map(enrich).filter(l => {
-    if (q && !(strip(l.name).includes(q) || strip(l.address).includes(q) ||
-               (l.phone || "").replace(/\s/g, "").includes(q.replace(/\s/g, "")))) return false;
+  const find = searcher(els.q.value);
+  return cityLeads().filter(l => !find || leadHit(find, l)).map(enrich).filter(l => {
     if (!skipCat && els.fCat.value && l.category !== els.fCat.value) return false;
     if (els.fLead.value && l.lead !== els.fLead.value) return false;
     if (els.fStatus.value && l.status !== els.fStatus.value) return false;
@@ -502,6 +538,10 @@ function render() {
   els.empty.hidden = rows.length > 0;
   els.count.textContent = (rows.length > ROW_CAP ? `showing ${ROW_CAP} of ` : "") +
     `${rows.length} / ${cityLeads().length} leads`;
+  const find = searcher(els.q.value);
+  const elsewhere = find ? LEADS.filter(l => leadHit(find, l)).length - rows.length : 0;
+  els.qMore.hidden = !elsewhere;
+  els.qMore.textContent = `Show ${elsewhere} more outside the filters`;
   els.datasub.textContent = `${els.fCity.value || "all of Romania"} · ${cityLeads().length} leads`;
   renderKpis();
 }
@@ -580,6 +620,10 @@ const TODO = [
     since: s => s.stages.published && s.stages.paid_full ? latest(s, "published", "paid_full") : null },
 ];
 
+/* when the lead landed on list b, null if it isn't on it. Closed, lost and
+   not-interested leads need nothing more from you */
+const sinceIn = (b, s) => b.phase === "Done" || !dead(s) ? b.since(s) : null;
+
 /* cumulative: a lead counts for every step up to the furthest one it reached.
    Published and paid in full happen in either order, so both compare to completed. */
 const FUNNEL = [
@@ -619,9 +663,11 @@ const F = document.getElementById("funnel");
 function renderFunnel() {
   els.datasub.textContent = `pipeline across all cities · ${LEADS.length} leads on the list`;
   // leads that dropped off the list still have their notes in crm, so count them too
+  const find = searcher(els.q.value);
   const people = Object.entries(store.byId).filter(([, s]) => touched(s)).map(([id, s]) => {
-    const l = leadById.get(id);
-    return { id, s, name: l?.name || s.name || id, city: l?.city || "", phone: s.phone || l?.phone || "", gone: !l };
+    const l = leadById.get(id), name = l?.name || s.name || id;
+    return { id, s, name, city: l?.city || "", phone: s.phone || l?.phone || "", gone: !l,
+             hit: !!find && find(name, l?.address, s.phone, l?.phone) };
   });
 
   const counts = FUNNEL.map(([label, test, base], i) =>
@@ -648,9 +694,7 @@ function renderFunnel() {
   }).join("");
 
   const bucket = b => {
-    // closed, lost and not-interested leads need nothing more from you
-    const rows = people.filter(p => b.phase === "Done" || !dead(p.s))
-      .map(p => ({ ...p, since: b.since(p.s) })).filter(p => p.since != null)
+    const rows = people.map(p => ({ ...p, since: sinceIn(b, p.s) })).filter(p => p.since != null)
       .map(p => ({ ...p, days: daysSince(p.since) }))
       .sort((x, y) => b.late === Infinity ? (y.since > x.since ? 1 : -1) : (y.days ?? -1) - (x.days ?? -1));
     const over = rows.filter(r => r.days > b.late).length;
@@ -671,7 +715,32 @@ function renderFunnel() {
     `<h3 class="fphase">${ph}</h3><div class="buckets">${TODO.filter(b => b.phase === ph).map(bucket).join("")}</div>`
   ).join("");
 
-  F.innerHTML = `<div class="fgrid">
+  /* a search lists every client in the pipeline it matches, with what they're
+     waiting on. Plenty of them sit on no list below, a no-answer call for one */
+  let found = "";
+  if (find) {
+    const hits = people.filter(p => p.hit).sort((x, y) => (y.s.log[0]?.t || "").localeCompare(x.s.log[0]?.t || ""));
+    const fresh = LEADS.filter(l => !touched(stateOf(l)) && leadHit(find, l)).length;
+    const li = r => {
+      const stage = lastStage(r.s);
+      const next = TODO.filter(b => b.phase !== "Done" && sinceIn(b, r.s) != null).map(b => b.title);
+      return `<li data-id="${esc(r.id)}" class="${r.id === selectedId ? "sel" : ""}">
+          <span class="nm">${esc(r.name)}${r.gone ? ` <small>(off the list)</small>` : ""}</span>
+          <span class="age">${badge("st-" + esc(r.s.status), stOf(r.s.status).icon, stOf(r.s.status).label)}</span>
+          <span class="ct">${[esc(r.city), r.phone ? `<a href="tel:${esc(r.phone.replace(/\s/g, ""))}">${esc(r.phone)}</a>` : "",
+            stage ? esc(STG[stage].label) : "", next.length ? `Next: ${esc(next.join(", "))}` : ""].filter(Boolean).join(" · ")}</span>
+        </li>`;
+    };
+    found = `<section class="bucket found">
+      <div class="bh"><b>Search results</b><span class="n">${hits.length}</span></div>
+      <p class="hint">${hits.length ? "Clients in the pipeline that match, latest activity first." : "Nobody in the pipeline matches."}
+        ${fresh ? `${fresh} untouched ${fresh > 1 ? "leads on the list match" : "lead on the list matches"}.
+          <button id="qLeads">Show in Leads</button>` : ""}</p>
+      ${hits.length ? `<ul>${hits.map(li).join("")}</ul>` : ""}
+    </section>`;
+  }
+
+  F.innerHTML = found + `<div class="fgrid">
       <section class="fcard"><h3>Funnel</h3>
         <p class="hint">Leads that reached each step, and the share of the step before it. Hover a bar for details.</p>${bars}</section>
       <section class="fcard"><h3>Done lately</h3>
@@ -687,6 +756,7 @@ function ageText(days, b) {
   return days ? `${days}d` : "today";
 }
 F.addEventListener("click", e => {
+  if (e.target.closest("#qLeads")) return showAllMatches();
   if (e.target.closest("a")) return;
   const li = e.target.closest("li[data-id]");
   if (!li) return;
